@@ -1,0 +1,580 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Best Practice SNS Topic
+Parameters:
+  CFStackName:
+    Type: String
+    Default: tele2-demo
+  SubscriptionEndPoint:
+    Type: String
+    Description: The endpoint that receives notifications from the Amazon SNS topic.
+      The endpoint value depends on the protocol that you specify. This could be a
+      URL or ARN
+  SubscriptionProtocol:
+    Type: String
+    Description: The subscription's protocol
+    AllowedValues:
+    - http
+    - https
+    - email
+    - email-json
+    - sms
+    - sqs
+    - application
+    - lambda
+    Default: email
+  CodeCommitRepoName:
+    Type: String
+    Description: Please enter the code commit repository name
+  CodeCommitRepoDescription:
+    Type: String
+    Description: please enter the codecommit repository description
+  BucketName:
+    Type: String
+    Description: Enter Your BucketName
+  AWSDefaultRegion:
+    Type: String
+    Default: "us-west-2"
+    Description: please enter the ECR repository region
+  RepositoryURI:
+    Type: String
+    Description: enter your repository URI
+    Default: 123456789012.dkr.ecr.region.amazonaws.com/image:tag
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Environment Configuration"
+        Parameters:
+          - EnvParm
+      - Label:
+          default: "CodeCommit Configuration"
+        Parameters:
+          - CodeCommitRepoName
+          - CodeCommitRepoDescription
+      - Label:
+          default: "ArtifactStore Configuration"
+        Parameters:
+          - BucketName
+      - Label:
+          default: "SNS Topic Configuration"
+        Parameters:
+          - SubscriptionEndPoint
+          - SubscriptionProtocol
+      - Label:
+          default: "ECR Repository configuration"
+        Parameters:
+          - AWSDefaultRegion
+          - RepositoryURI
+    ParameterLabels:
+      EnvParm:
+        default: Choose your Environment like Development or Production
+      CodeCommitRepoName:
+        default: To store your Project
+      CodeCommitRepoDescription:
+        default: Give some description of your repository
+      BucketName: 
+        default: to store codepipeline artificats
+      SubscriptionEndPoint: 
+        default: Which mail you want notifications
+      SubscriptionProtocol: 
+        default: choose your protocol
+      AWSDefaultRegion: 
+        default: choose your region
+      RepositoryURI:
+         default: enter your ecr repo
+Mappings: {}
+Conditions: {}
+Resources:
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+     TopicName: !Ref AWS::StackName
+     DisplayName: !Ref AWS::StackName    
+  SNSSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint:
+        Ref: SubscriptionEndPoint
+      Protocol:
+        Ref: SubscriptionProtocol
+      TopicArn:
+        Ref: SNSTopic
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+       BucketName: !Ref BucketName
+       VersioningConfiguration:
+           Status: Enabled
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+       Bucket: !Ref S3Bucket
+       PolicyDocument:
+          Statement:
+            - 
+              Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Join ['',['arn:aws:s3:::',!Ref S3Bucket, '/*']]
+                - !Join ['',['arn:aws:s3:::',!Ref S3Bucket]] 
+              Principal:
+                AWS:
+                     - !Sub arn:aws:iam::${AWS::AccountId}:root
+                     - !Sub arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-CodePipeLineRole
+                     - !Sub arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-CodeBuildRole 
+                     - !Sub arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-CloudFormationRole
+  CodeBuildRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-CodeBuildRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "codebuild.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+  CodeBuildPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${AWS::StackName}-CodeBuildPolicies
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+              
+          - 
+            Effect: Allow
+            Action:
+               - kms:Decrypt
+            Resource: !GetAtt KMSKey.Arn
+          -
+            Effect: Allow
+            Action:
+              - ecr:*
+            Resource: "*"
+          - 
+            Effect: Allow
+            Action:
+               - codebuild:CreateReportGroup
+               - codebuild:CreateReport
+               - codebuild:UpdateReport
+               - codebuild:BatchPutTestCases
+               - codebuild:BatchPutCodeCoverages
+            Resource:
+               - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${AWS::StackName}-CodeBuild*'
+          -
+            Effect: Allow
+            Action:
+              - codecommit:GitPull
+            Resource:
+               - !Sub 'arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:*'
+          - 
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource:
+               - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-CodeBuild:*'
+               - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-CodeBuild:*'
+          -
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetBucketPolicy
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+             #- !Sub arn:aws:s3:::${S3Bucket}/*
+             #- !Sub arn:aws:s3:::${S3Bucket}
+             - !Join ['',['arn:aws:s3:::',!Ref S3Bucket, '/*']]
+             - !Join ['',['arn:aws:s3:::',!Ref S3Bucket]]
+      Roles:
+        -
+          !Ref CodeBuildRole
+        
+  PipeLineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-CodePipeLineRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+  PipelinePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${AWS::StackName}-CodePipeLinePolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - 
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+            Resource: !GetAtt KMSKey.Arn
+          -
+            Effect: Allow
+            Action:
+              - codepipeline:*
+              - kms:Decrypt
+              - iam:ListRoles
+              - cloudformation:Describe*
+              - cloudFormation:List*
+              - codecommit:List*
+              - codecommit:Get*
+              - codecommit:GitPull
+              - codecommit:UploadArchive
+              - codecommit:CancelUploadArchive
+              - codebuild:BatchGetBuilds
+              - codebuild:StartBuild
+              - cloudformation:CreateStack
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeStacks
+              - cloudformation:UpdateStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:SetStackPolicy
+              - cloudformation:ValidateTemplate
+              - iam:PassRole
+              - s3:ListAllMyBuckets
+              - s3:GetBucketLocation
+              - ec2:DescribeVpcs
+              - sns:*
+            Resource:
+              - "*"
+          -
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetBucketPolicy
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+             #- !Sub arn:aws:s3:::${S3Bucket}/*
+             #- !Sub arn:aws:s3:::${S3Bucket}/*
+             - !Join ['',['arn:aws:s3:::',!Ref S3Bucket, '/*']]
+             - !Join ['',['arn:aws:s3:::',!Ref S3Bucket]]
+
+      Roles:
+        -
+          !Ref PipeLineRole
+  CFDeployerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-CloudFormationRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+  CFDeployerPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${AWS::StackName}-CloudFormationPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - 
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+            Resource: !GetAtt KMSKey.Arn
+          -
+            Effect: Allow
+            Action:
+              - ecs:*
+              - events:* 
+              - iam:CreateRole
+              - iam:CreatePolicy
+              - iam:GetRole
+              - iam:DeleteRole
+              - iam:PutRolePolicy
+              - iam:PassRole
+              - iam:DeleteRolePolicy
+              - cloudformation:*
+              - ec2:DescribeVpcs
+              - ec2:DescribeSubnets
+              - ec2:DescribeStaleSecurityGroups
+              - ec2:DescribeSecurityGroupReferences
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeSecurityGroupReferences
+              - elasticloadbalancing:*
+              - sns:*
+              - cloudwatch:*
+              - ecr:*
+            Resource: "*"
+          -
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetBucketPolicy
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+             #- !Sub arn:aws:s3:::${S3Bucket}/*
+             #- !Sub arn:aws:s3:::${S3Bucket}
+             - !Join ['',['arn:aws:s3:::',!Ref S3Bucket, '/*']]
+             - !Join ['',['arn:aws:s3:::',!Ref S3Bucket]]
+      Roles:
+        -
+          !Ref CFDeployerRole
+  KMSKey:
+    DependsOn: PipeLineRole
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Used by Assumed Roles in Dev/Test/Prod accounts to Encrypt/Decrypt code
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: !Sub ${AWS::StackName}-Key
+        Statement:
+         - 
+           Sid: Allows admin of the key
+           Effect: Allow
+           Principal:
+             AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+           Action:
+             - "kms:Create*"
+             - "kms:Describe*"
+             - "kms:Enable*"
+             - "kms:List*"
+             - "kms:Put*"
+             - "kms:Update*"
+             - "kms:Revoke*"
+             - "kms:Disable*"
+             - "kms:Get*"
+             - "kms:Delete*"
+             - "kms:ScheduleKeyDeletion"
+             - "kms:CancelKeyDeletion"
+             - "kms:TagResource"
+             - "kms:UntagResource"
+           Resource: "*"
+         - 
+           Effect: Allow
+           Principal:
+             AWS:
+               - !Sub arn:aws:iam::${AWS::AccountId}:root
+               - !Sub arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-CodePipeLineRole
+               - !Sub arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-CodeBuildRole 
+               - !Sub arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-CloudFormationRole
+           Action:
+             - "kms:Encrypt"
+             - "kms:Decrypt"
+             - "kms:ReEncrypt*"
+             - "kms:GenerateDataKey*"
+             - "kms:DescribeKey"
+           Resource: "*"
+  KMSAlias:
+     Type: AWS::KMS::Alias
+     Properties:
+       AliasName: !Sub alias/${AWS::StackName}-KMSKey
+       TargetKeyId: !Ref KMSKey
+  CodeCommitRepo:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+     RepositoryName: !Ref CodeCommitRepoName
+     RepositoryDescription: !Ref CodeCommitRepoDescription
+     Triggers:
+     - Name: !Ref CodeCommitRepoName
+       CustomData: Project ID
+       DestinationArn:
+        Ref: SNSTopic
+       Branches:
+       - Master
+       Events:
+       - all
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${AWS::StackName}-CodeBuild
+      EncryptionKey: !GetAtt KMSKey.Arn
+      ServiceRole: !Ref CodeBuildRole
+      Artifacts:
+        Type: CODEPIPELINE
+#        Path: Zip
+#        Location:
+#          Ref: ArtifactStoreS3Location
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+            - Name: AWS_DEFAULT_REGION
+              Type: PLAINTEXT
+              Value: !Ref AWSDefaultRegion
+            - Name: REPOSITORY_URI
+              Type: PLAINTEXT
+              Value: !Ref RepositoryURI
+      Source:
+        BuildSpec: |
+           version: 0.2
+           phases:
+             install:
+               commands:
+                  - echo Logging in to Amazon ECR...
+                  - aws --version
+                  - $(aws ecr get-login --region $AWS_DEFAULT_REGION --no-include-email)
+                  - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+                  - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION)
+             build:
+               commands:
+                  - echo Build started on `date`
+                  - echo Building the Docker image...
+                  - docker build -t $REPOSITORY_URI:latest .
+                  - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+             post_build:
+               commands:
+                  - echo Build completed on `date`
+                  - echo Pushing the Docker images...
+                  - docker push $REPOSITORY_URI:latest
+                  - docker push $REPOSITORY_URI:$IMAGE_TAG
+                  - echo Writing image definitions file...
+                  - printf '{"Parameters":{"Image":"%s"}}' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
+                  - cat imagedefinitions.json 
+           artifacts:
+              files: 
+                 - imagedefinitions.json
+                 - ecs_tele.yaml
+                 #- deploy.sh
+                 #- service.json
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 60
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${AWS::StackName}-CodePipeline
+      RoleArn: !GetAtt PipeLineRole.Arn
+      Stages:
+      - Name: DownloadSource
+        Actions:
+        - Name: SourceCode
+          ActionTypeId:
+            Category: Source
+            Owner: AWS
+            Version: 1
+            Provider: CodeCommit
+          OutputArtifacts:
+          - Name: Sources
+          Configuration:
+            BranchName: master
+            RepositoryName: 
+               Fn::GetAtt:
+                  - CodeCommitRepo
+                  - Name
+          RunOrder: 1
+      - Name: Build
+        Actions:
+        - Name: CodeBuild
+          InputArtifacts:
+          - Name: Sources
+          ActionTypeId:
+            Category: Build
+            Owner: AWS
+            Version: 1
+            Provider: CodeBuild
+          OutputArtifacts:
+          - Name: CFNTemplateArtifact
+          Configuration:
+            ProjectName:
+              Ref: CodeBuildProject
+          RunOrder: 1
+      - Name: Approval
+        Actions:
+        - Name: ManualApproval
+          ActionTypeId:
+            Category: Approval
+            Owner: AWS
+            Version: 1
+            Provider: Manual
+          Configuration:
+            NotificationArn:
+              Ref: SNSTopic
+          RunOrder: 1
+      - Name: Deploy
+        Actions:
+        - Name: createchangeset
+          InputArtifacts:
+          - Name: CFNTemplateArtifact
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Version: 1
+            Provider: CloudFormation
+          OutputArtifacts:
+          - Name: CreatedCFNStack
+          Configuration:
+            ActionMode: CHANGE_SET_REPLACE
+            ChangeSetName: ExecuteChangeSet
+            RoleArn: !GetAtt CFDeployerRole.Arn
+            Capabilities: CAPABILITY_NAMED_IAM
+            StackName: !Ref CFStackName
+            TemplatePath: CFNTemplateArtifact::ecs_tele.yaml
+            TemplateConfiguration: CFNTemplateArtifact::imagedefinitions.json
+            OutputFileName: output.json
+          RunOrder: 1
+        - Name: cloudformation
+          InputArtifacts:
+          - Name: CreatedCFNStack
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Version: 1
+            Provider: CloudFormation
+          Configuration:
+            ActionMode: CHANGE_SET_EXECUTE
+            ChangeSetName: ExecuteChangeSet
+            StackName: !Ref CFStackName
+          RunOrder: 3
+      ArtifactStore:
+        Type: S3
+        Location:
+          Ref: S3Bucket
+        EncryptionKey: 
+            Id: !GetAtt KMSKey.Arn
+            Type: KMS
+
+
+ 
+Outputs:
+  TopicARN:
+    Description: ARN of newly created SNS Topic
+    Value:
+      Ref: SNSTopic
+  QueueName:
+    Description: Name of newly created SNS Topic
+    Value:
+      Fn::GetAtt:
+      - SNSTopic
+      - TopicName
+  CodeCommitURLS:
+    Description: Name of newly created codecommit
+    Value: !GetAtt CodeCommitRepo.CloneUrlSsh
+  S3BucketName:
+    Description: Name of the S3 Bucket
+    Value: !Ref S3Bucket
